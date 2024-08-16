@@ -1,0 +1,114 @@
+import os
+import base64
+import requests
+import json
+from dotenv import load_dotenv
+
+load_dotenv()
+count=0
+caption_list=[]
+def get_image_base64(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def generate_captions(image_paths):
+    endpoint = os.getenv("ENDPOINT")
+    api_key = os.getenv("API_KEY")
+    deployment_name = "gpt-4o"
+    api_version = os.getenv("API_VERSION")
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": api_key
+    }
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Please provide a caption for each of the following images.\
+                    The caption should be relevant with all the details in the image and will be used for training the model.\
+                    Example of captioning is\
+                    This image represents AI operations The logo features AI in large letters \
+Below the main text are three icons illustrating different aspects of AIOps\
+On the left,  a simplified chip or processor icon \
+In the center a line graph shows \
+On the right, there are outlines of a desktop \
+    Colorful stack icon is Xenonstack logo.\
+        Generate a caption in one line with all the necessary details.DOnt include commas in the captions"
+                }
+            ]
+        }
+    ]
+
+    for image_path in image_paths:
+        image_base64 = get_image_base64(image_path)
+        messages[0]["content"].append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        })
+
+    payload = {
+        "messages": messages,
+        "max_tokens": 800,
+        "temperature": 0.2,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "top_p": 0.95
+    }
+
+    response = requests.post(
+        f"{endpoint}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}",
+        headers=headers,
+        json=payload
+    )
+
+    if response.status_code == 200:
+        response_data = response.json()
+        caption_list.append(response_data["choices"][0]["message"]["content"])
+        
+        print("Response Data:", response_data["choices"][0]["message"]["content"]) 
+        return caption_list
+    else:
+        raise Exception(f"Error: {response.status_code}, {response.text}")
+
+def save_captions_to_jsonl(captions, output_file):
+    with open(output_file, 'w') as jsonl_file:
+        for caption in captions:
+            jsonl_file.write(json.dumps(caption) + '\n')
+
+def process_images_in_folder(folder_path,batch_size=5):
+    image_paths = []
+    all_captions = []
+    
+    for filename in os.listdir(folder_path):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+            image_path = os.path.join(folder_path, filename)
+            if os.path.isfile(image_path):
+                image_paths.append(image_path)
+                
+                if len(image_paths) == batch_size:
+                    batch_captions = generate_captions(image_paths)
+                    for i, path in enumerate(image_paths):
+                        all_captions.append({
+                            "file_name": os.path.basename(path),
+                            "text": batch_captions[i]
+                        })
+                    image_paths = []
+    
+    if image_paths:
+        batch_captions = generate_captions(image_paths)
+        for i, path in enumerate(image_paths):
+            all_captions.append({
+                "file_name": os.path.basename(path),
+                "text": batch_captions[i]
+            })
+    
+    save_captions_to_jsonl(all_captions, os.path.join(folder_path, "captions.jsonl"))
+
+folder_path = "demo/"
+process_images_in_folder(folder_path)
